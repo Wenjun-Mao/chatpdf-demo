@@ -123,11 +123,13 @@ def process_file(file):
 
 def get_answer(question):
     global qa
+    global process_status
     if process_status:
         result = qa({"question": question})
         return result["answer"], prettify_chat_history(result), prettify_source_documents(result), result['generated_question']
     else:
-        return "请先上传并处理文件 Please upload and process a file first."
+        error_msg = "请先上传并分析文件 Please upload and process a file first."
+        return error_msg, error_msg, error_msg, error_msg
 
 
 with gr.Blocks() as demo:
@@ -156,4 +158,4 @@ with gr.Blocks() as demo:
     btn_clear.click(fn=clear_all, outputs = [pdf_upload, chat_hitsory, source_documents])
 
 gr.close_all()
-demo.launch(share=True)
+demo.launch(share=False, server_port=7878)
