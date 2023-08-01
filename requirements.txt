@@ -1,0 +1,8 @@
+openai
+langchain
+python-dotenv
+pypdf
+gradio
+langchain[docarray]
+pdfplumber
+tiktoken
