@@ -9,6 +9,7 @@ qa = None
 process_status = False
 USERID = ""
 
+
 def save_file(file, userid):
     if not os.path.exists(f"user_files/{userid}/docs"):
         os.makedirs(f"user_files/{userid}/docs")
@@ -73,6 +74,7 @@ def process_file(files, userid):
         return "文件处理完成 Processing complete."
     else:
         return "没有文件或用户ID File not uploaded."
+
 
 def get_answer(question):
     global qa
