@@ -1,13 +1,15 @@
 import gradio as gr
 import os
 import shutil
+import glob
+
+from typing import IO
 
 from util import (
     prettify_source_documents,
     prettify_chat_history,
     delete_user,
     clear_all_files_only,
-    load_db
 )
 
 
@@ -15,12 +17,98 @@ qa = None
 process_status = False
 USERID = ""
 
+# ---------- langchain Start----------
+from langchain.vectorstores import Chroma
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.document_loaders import PDFPlumberLoader
+from langchain.embeddings.openai import OpenAIEmbeddings
+from langchain.memory import ConversationBufferMemory
+from langchain.chains import ConversationalRetrievalChain
+from langchain.chat_models import ChatOpenAI
 
-def load_user_files_into_db(file_list, userid):
-    pass
+embedding = OpenAIEmbeddings()
+
+def load_pdf(file_list):
+    loders = [PDFPlumberLoader(file) for file in file_list]
+    docs = []
+    for loader in loders:
+        docs.extend(loader.load())
+    return docs
 
 
-def initialize_user(userid):
+def split_docs(docs, chinese=True):
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
+    if chinese:
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=70)
+    splits = text_splitter.split_documents(docs)
+    return splits
+
+
+def create_vectordb(splits, persist_directory):
+    vectordb = Chroma.from_documents(
+    documents=splits,
+    embedding=embedding,
+    persist_directory=persist_directory
+)
+    vectordb.persist()
+    return vectordb
+
+
+def create_user_vectordb_with_initial_files(file_list, userid):
+    persist_directory = f'user_files/{userid}/chroma/'
+    if not os.path.exists(persist_directory):
+        os.makedirs(persist_directory)
+    docs = load_pdf(file_list)
+    splits = split_docs(docs)
+    vectordb = create_vectordb(splits, persist_directory)
+    message = f"Created user vectordb with {len(file_list)} files. User ID: {userid}"
+    return message, vectordb
+
+
+def load_user_db(userid):
+    persist_directory = f'user_files/{userid}/chroma/'
+    vectordb = Chroma(
+        persist_directory=persist_directory,
+        embedding_function=embedding
+    )
+    return vectordb
+
+
+def load_and_add_new_files_to_user_db(file_list, userid):
+    persist_directory = f'user_files/{userid}/chroma/'
+    docs = load_pdf(file_list)
+    splits = split_docs(docs)
+    vectordb = load_user_db(persist_directory)
+    _ = vectordb.add_documents(splits)
+    return vectordb
+
+
+def create_qa_chain(vectordb, llm_name="gpt-3.5-turbo-0613", chain_type='stuff', k=4, mmr=True):
+    memory = ConversationBufferMemory(
+        memory_key="chat_history",
+        input_key='question',
+        output_key='answer',
+        return_messages=True
+    )
+    retriever=vectordb.as_retriever(search_type="similarity", search_kwargs={"k": k})
+    if mmr:
+        retriever=vectordb.as_retriever(search_type="mmr", search_kwargs={"k": k})
+
+    qa_chain = ConversationalRetrievalChain.from_llm(
+        llm=ChatOpenAI(model_name=llm_name, temperature=0),
+        chain_type=chain_type,
+        retriever=retriever,
+        return_source_documents=True,
+        return_generated_question=True,
+        verbose=True,
+        memory=memory,
+    )
+    return qa_chain
+
+
+# ---------- langchain End----------
+
+def get_user_existing_files_list(userid):
     # Check if user exists
     if os.path.exists(f"user_files/{userid}"):
         # If user exists, read existing file names
@@ -30,11 +118,16 @@ def initialize_user(userid):
         except FileNotFoundError:
             # Check if there are files in the "docs" folder
             docs_dir = f"user_files/{userid}/docs"
-            if os.path.exists(docs_dir):
+            if os.path.exists(docs_dir) and glob.glob(docs_dir + '/*.pdf'):
                 print("User list corrupted, reloading existing files...")
                 existing_files = os.listdir(docs_dir)
-                # Add them to the list and write them to file_list.txt
-                load_user_files_into_db(existing_files, userid)
+                
+                # Delete existing db
+                if os.path.exists(f'user_files/{userid}/chroma/'):
+                    shutil.rmtree(f'user_files/{userid}/chroma/')
+                _ = create_user_vectordb_with_initial_files(existing_files, userid)
+
+                # Create file list
                 with open(f"user_files/{userid}/file_list.txt", 'w', encoding='utf-8') as f:
                     f.write('\n'.join(existing_files))
             else:
@@ -45,7 +138,12 @@ def initialize_user(userid):
     return existing_files
 
 
-def save_file(file, userid, existing_files):
+def save_file(file: IO, userid: str, existing_files: list[str]) -> tuple[str, str]:
+    # if file already exists
+    # return (None, "file already exists")
+    # if file does not exist
+    # save file and 
+    # return (file_path, None)
     if not os.path.exists(f"user_files/{userid}/docs"):
         os.makedirs(f"user_files/{userid}/docs")
 
@@ -55,6 +153,7 @@ def save_file(file, userid, existing_files):
     if base_file_name in existing_files:
         return None, f"File '{base_file_name}' already exists."
 
+    # Save new file
     saved_file_path = os.path.join(f"user_files/{userid}/docs", base_file_name)
     shutil.move(file.name, saved_file_path)
 
@@ -62,56 +161,26 @@ def save_file(file, userid, existing_files):
 
 
 def save_files(files, userid):
-    file_paths = []
-    messages = []
-    existing_files = initialize_user(userid)
+    # Save files to user_files/userid/docs
+    # Get only new added file paths
+    # Write to user_files/userid/file_list.txt
+    # Return list of only new added file paths
+    added_file_paths = []
+    already_exist_messages = []
+    existing_files = get_user_existing_files_list(userid)
 
     for file in files:
         file_path, message = save_file(file, userid, existing_files)
         if file_path:
-            file_paths.append(file_path)
+            added_file_paths.append(file_path)
         if message:
-            messages.append(message)
+            already_exist_messages.append(message)
 
     # Update file list
     with open(f"user_files/{userid}/file_list.txt", 'w', encoding='utf-8') as f:
-        f.write('\n'.join([os.path.basename(fp) for fp in file_paths + existing_files]))
+        f.write('\n'.join([os.path.basename(fp) for fp in added_file_paths + existing_files]))
 
-    return file_paths, messages
-
-
-def save_files_and_load_db(files, userid):
-    global qa
-    file_paths = save_files(files, userid)
-    # qa = load_db(file_path)
-    print(file_paths)
-    qa = 1
-    return qa
-
-
-def process_files(files, userid):
-    if (files is not None) and (userid != ""):
-        try:
-            qa = save_files_and_load_db(files, userid)
-        except:
-            return "Error processing file."
-        process_status = True
-        return "文件处理完成 Processing complete."
-    else:
-        return "没有文件或用户 ID File not uploaded."
-
-
-def load_user_profile(userid):
-    with open(f"user_files/{userid}/file_list.txt", 'r', encoding='utf-8') as f:
-        lines = [line.strip() for line in f]
-    existing_files = '\n\n'.join(lines)
-    num_files = len(lines)
-    message = (
-        f"用户资料加载完成 User profile loaded. User ID: {userid}"
-        f"\n\n已上传文件 Uploaded files, 数量 {num_files}\n\n"
-        f"{existing_files}"
-    )
-    return message
+    return added_file_paths, already_exist_messages
 
 
 def process_file_and_load_user_profile(files, userid):
@@ -120,16 +189,36 @@ def process_file_and_load_user_profile(files, userid):
     global USERID
 
     USERID = userid
+
     if userid == "":
         process_message = "请先输入用户ID -- Please enter a user ID first"
+        return process_message
 
     else:
-        if files is not None:
-            process_message = process_files(files, userid)
+        existing_user = os.path.exists(f"user_files/{userid}")
+        if existing_user:
+            if files is not None:
+                added_file_paths, _ = save_files(files, userid)
+                vectordb = load_and_add_new_files_to_user_db(added_file_paths, userid)
+            else: # no new files
+                vectordb = load_user_db(userid)
+            qa = create_qa_chain(vectordb)
+            process_status = True
+            process_message = "文件已分析完毕 Files have been processed."
 
-        process_message = load_user_profile(userid)
+        else: # new user
+            if files is not None:
+                # save files and create user db
+                added_file_paths, _ = save_files(files, userid)
+                process_message, vectordb = create_user_vectordb_with_initial_files(added_file_paths, userid)
+                qa = create_qa_chain(vectordb)
+                process_status = True
+            else:
+                process_message = "请先上传文件 Please upload a file first."
+                return process_message
 
     return process_message
+
 
 def get_answer(question, userid):
     global qa

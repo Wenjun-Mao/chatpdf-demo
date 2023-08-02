@@ -24,7 +24,7 @@ def prettify_source_documents(result):
     divider = '----------------------------------------\n'
     for doc in result['source_documents']:
         source_documents_printout += f'{doc.page_content}\n'
-        source_documents_printout += f"""文件：{doc.metadata['source']}  """
+        source_documents_printout += f"""{divider}来源文件：{doc.metadata['source']}\n"""
         source_documents_printout += f"""{divider}页码：{doc.metadata['page']}/{doc.metadata['total_pages']}\n\n"""
     return source_documents_printout
 
@@ -39,7 +39,7 @@ def prettify_chat_history(result):
 
 
 
-def load_db(file, chain_type='stuff', k=2, mmr=False, chinese = True):
+def old_load_db(file, chain_type='stuff', k=2, mmr=False, chinese = True):
     llm_name = "gpt-3.5-turbo-0613"
     # load documents
     loader = PDFPlumberLoader(file)   # replaced pypdf with pdfplumber for better Chinese support
