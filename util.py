@@ -11,6 +11,7 @@ from langchain.document_loaders import PyPDFLoader, PDFPlumberLoader, PyMuPDFLoa
 from langchain.memory import ConversationBufferMemory
 
 import os
+import shutil
 import openai
 from dotenv import load_dotenv, find_dotenv
 _ = load_dotenv(find_dotenv())
@@ -79,3 +80,29 @@ def load_db(file, chain_type='stuff', k=2, mmr=False, chinese = True):
         memory=memory
     )
     return qa
+
+
+def clear_all_files_only():
+    global qa
+    global process_status
+    qa = None
+    process_status = False
+    if os.path.exists('doc'):
+        for filename in os.listdir('doc'):
+            file_path = os.path.join('doc', filename)
+            if os.path.isfile(file_path) or os.path.islink(file_path):
+                os.unlink(file_path)
+            elif os.path.isdir(file_path):
+                shutil.rmtree(file_path)
+    return None, None, None
+
+
+def delete_user(userid):
+    if userid != "":
+        global qa
+        global process_status
+        qa = None
+        process_status = False
+        if os.path.exists(f'user_files/{userid}'):
+            shutil.rmtree(f'user_files/{userid}')
+        return None, None, None, None

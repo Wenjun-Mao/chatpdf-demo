@@ -2,7 +2,13 @@ import gradio as gr
 import os
 import shutil
 
-from util import prettify_source_documents, prettify_chat_history, load_db
+from util import (
+    prettify_source_documents,
+    prettify_chat_history,
+    delete_user,
+    clear_all_files_only,
+    load_db
+)
 
 
 qa = None
@@ -10,75 +16,127 @@ process_status = False
 USERID = ""
 
 
-def save_file(file, userid):
+def load_user_files_into_db(file_list, userid):
+    pass
+
+
+def initialize_user(userid):
+    # Check if user exists
+    if os.path.exists(f"user_files/{userid}"):
+        # If user exists, read existing file names
+        try:
+            with open(f"user_files/{userid}/file_list.txt", 'r', encoding='utf-8') as f:
+                existing_files = f.read().splitlines()
+        except FileNotFoundError:
+            # Check if there are files in the "docs" folder
+            docs_dir = f"user_files/{userid}/docs"
+            if os.path.exists(docs_dir):
+                print("User list corrupted, reloading existing files...")
+                existing_files = os.listdir(docs_dir)
+                # Add them to the list and write them to file_list.txt
+                load_user_files_into_db(existing_files, userid)
+                with open(f"user_files/{userid}/file_list.txt", 'w', encoding='utf-8') as f:
+                    f.write('\n'.join(existing_files))
+            else:
+                existing_files = []
+    else:
+        existing_files = []
+
+    return existing_files
+
+
+def save_file(file, userid, existing_files):
     if not os.path.exists(f"user_files/{userid}/docs"):
         os.makedirs(f"user_files/{userid}/docs")
 
     base_file_name = os.path.basename(file.name)
+
+    # Check if file already exists in the list
+    if base_file_name in existing_files:
+        return None, f"File '{base_file_name}' already exists."
+
     saved_file_path = os.path.join(f"user_files/{userid}/docs", base_file_name)
     shutil.move(file.name, saved_file_path)
 
-    return saved_file_path
+    return saved_file_path, None
 
 
-def save_file_and_load_db(files, userid):
-    global qa
+def save_files(files, userid):
     file_paths = []
+    messages = []
+    existing_files = initialize_user(userid)
+
     for file in files:
-        file_path = save_file(file, userid)
-        file_paths.append(file_path)
+        file_path, message = save_file(file, userid, existing_files)
+        if file_path:
+            file_paths.append(file_path)
+        if message:
+            messages.append(message)
+
+    # Update file list
+    with open(f"user_files/{userid}/file_list.txt", 'w', encoding='utf-8') as f:
+        f.write('\n'.join([os.path.basename(fp) for fp in file_paths + existing_files]))
+
+    return file_paths, messages
+
+
+def save_files_and_load_db(files, userid):
+    global qa
+    file_paths = save_files(files, userid)
     # qa = load_db(file_path)
+    print(file_paths)
     qa = 1
     return qa
 
 
-def clear_all_files_only():
-    global qa
-    global process_status
-    qa = None
-    process_status = False
-    if os.path.exists('doc'):
-        for filename in os.listdir('doc'):
-            file_path = os.path.join('doc', filename)
-            if os.path.isfile(file_path) or os.path.islink(file_path):
-                os.unlink(file_path)
-            elif os.path.isdir(file_path):
-                shutil.rmtree(file_path)
-    return None, None, None
-
-
-def delete_user(userid):
-    if userid != "":
-        global qa
-        global process_status
-        qa = None
-        process_status = False
-        if os.path.exists(f'user_files/{userid}'):
-            shutil.rmtree(f'user_files/{userid}')
-        return None, None, None, None
-
-
-def process_file(files, userid):
-    global process_status
-    global qa
-    global USERID
-
-    USERID = userid
-
+def process_files(files, userid):
     if (files is not None) and (userid != ""):
         try:
-            qa = save_file_and_load_db(files, userid)
+            qa = save_files_and_load_db(files, userid)
         except:
             return "Error processing file."
         process_status = True
         return "文件处理完成 Processing complete."
     else:
-        return "没有文件或用户ID File not uploaded."
+        return "没有文件或用户 ID File not uploaded."
 
 
-def get_answer(question):
+def load_user_profile(userid):
+    with open(f"user_files/{userid}/file_list.txt", 'r', encoding='utf-8') as f:
+        lines = [line.strip() for line in f]
+    existing_files = '\n\n'.join(lines)
+    num_files = len(lines)
+    message = (
+        f"用户资料加载完成 User profile loaded. User ID: {userid}"
+        f"\n\n已上传文件 Uploaded files, 数量 {num_files}\n\n"
+        f"{existing_files}"
+    )
+    return message
+
+
+def process_file_and_load_user_profile(files, userid):
+    global process_status
+    global qa
+    global USERID
+
+    USERID = userid
+    if userid == "":
+        process_message = "请先输入用户ID -- Please enter a user ID first"
+
+    else:
+        if files is not None:
+            process_message = process_files(files, userid)
+
+        process_message = load_user_profile(userid)
+
+    return process_message
+
+def get_answer(question, userid):
     global qa
     global process_status
+    global USERID
+    USERID = userid
+
     if process_status:
         result = qa({"question": question})
         return result["answer"], prettify_chat_history(result), prettify_source_documents(result), result['generated_question']
@@ -91,7 +149,7 @@ with gr.Blocks() as demo:
     gr.Markdown("# AI 论文小助手")
     userid = gr.Textbox(label="用户ID")
     pdf_upload = gr.Files(label="上传PDF文件")
-    btn_process = gr.Button("分析文件")
+    btn_process_and_load_user_profile = gr.Button("分析文件加载用户资料 Process files and load user profile")
     process_message = gr.Markdown()
     with gr.Row():
         with gr.Column(scale=4):
@@ -110,9 +168,9 @@ with gr.Blocks() as demo:
 
     btn_delete_user = gr.Button("删除用户")
 
-    # btn_process.click(fn=save_file_and_load_db, inputs = [pdf_upload], outputs = [output_question, output_answer])
-    btn_process.click(fn=process_file, inputs = [pdf_upload, userid], outputs = [process_message])
-    btn_ask.click(fn=get_answer, inputs = [current_question], outputs = [current_answer, chat_hitsory, source_documents, generated_question])
+    # btn_process_and_load_user_profile.click(fn=save_file_and_load_db, inputs = [pdf_upload], outputs = [output_question, output_answer])
+    btn_process_and_load_user_profile.click(fn=process_file_and_load_user_profile, inputs = [pdf_upload, userid], outputs = [process_message])
+    btn_ask.click(fn=get_answer, inputs = [current_question, userid], outputs = [current_answer, chat_hitsory, source_documents, generated_question])
     btn_clear.click(fn=clear_all_files_only, outputs = [pdf_upload, chat_hitsory, source_documents])
     btn_delete_user.click(fn=delete_user, inputs = [userid], outputs = [pdf_upload, chat_hitsory, source_documents, generated_question])
 
