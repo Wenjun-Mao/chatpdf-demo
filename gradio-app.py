@@ -6,7 +6,7 @@ from langchain.chains import RetrievalQA,  ConversationalRetrievalChain
 from langchain.memory import ConversationBufferMemory
 from langchain.chat_models import ChatOpenAI
 from langchain.document_loaders import TextLoader
-from langchain.document_loaders import PyPDFLoader, PDFPlumberLoader
+from langchain.document_loaders import PyPDFLoader, PDFPlumberLoader, PyMuPDFLoader
 
 from langchain.memory import ConversationBufferMemory
 
@@ -70,11 +70,13 @@ def load_db(file, chain_type='stuff', k=2, mmr=False, chinese = True):
 
 def prettify_source_documents(result):
     source_documents_printout = f'来源信息:\n\n'
+    divider = '----------------------------------------\n'
     for doc in result['source_documents']:
         source_documents_printout += f'{doc.page_content}\n'
         source_documents_printout += f"""文件：{doc.metadata['source']}  """
-        source_documents_printout += f"""页码：{doc.metadata['page']}/{doc.metadata['total_pages']}\n\n"""
+        source_documents_printout += f"""{divider}页码：{doc.metadata['page']}/{doc.metadata['total_pages']}\n\n"""
     return source_documents_printout
+
 
 def prettify_chat_history(result):
     chat_history_printout = f'历史对话:\n\n'
@@ -87,22 +89,23 @@ def prettify_chat_history(result):
 
 qa = None
 process_status = False
+USERID = ""
 
-def save_file(file):
-    if not os.path.exists("doc"):
-        os.makedirs("doc")
+def save_file(file, userid):
+    if not os.path.exists(f"user_files/{userid}/docs"):
+        os.makedirs(f"user_files/{userid}/docs")
 
     base_file_name = os.path.basename(file.name)
-    saved_file_path = os.path.join("doc", base_file_name)
+    saved_file_path = os.path.join(f"user_files/{userid}/docs", base_file_name)
     shutil.move(file.name, saved_file_path)
-    
+
     return saved_file_path
 
-def save_file_and_load_db(files):
+def save_file_and_load_db(files, userid):
     global qa
     file_paths = []
     for file in files:
-        file_path = save_file(file)
+        file_path = save_file(file, userid)
         file_paths.append(file_path)
     # qa = load_db(file_path)
     qa = 1
@@ -124,28 +127,33 @@ def clear_all_files_only():
     return None, None, None
 
 
-def clear_all_files_and_folder():
-    global qa
-    global process_status
-    qa = None
-    process_status = False
-    if os.path.exists('doc'):
-        shutil.rmtree('doc')
-    return None, None, None
+def delete_user(userid):
+    if userid != "":
+        global qa
+        global process_status
+        qa = None
+        process_status = False
+        if os.path.exists(f'user_files/{userid}'):
+            shutil.rmtree(f'user_files/{userid}')
+        return None, None, None, None
 
 
-def process_file(files):
+def process_file(files, userid):
     global process_status
     global qa
-    if files is not None:
+    global USERID
+
+    USERID = userid
+
+    if (files is not None) and (userid != ""):
         try:
-            qa = save_file_and_load_db(files)
+            qa = save_file_and_load_db(files, userid)
         except:
             return "Error processing file."
         process_status = True
         return "文件处理完成 Processing complete."
     else:
-        return "文件没有上传 File not uploaded."
+        return "没有文件或用户ID File not uploaded."
 
 def get_answer(question):
     global qa
@@ -160,6 +168,7 @@ def get_answer(question):
 
 with gr.Blocks() as demo:
     gr.Markdown("# AI 论文小助手")
+    userid = gr.Textbox(label="用户ID")
     pdf_upload = gr.Files(label="上传PDF文件")
     btn_process = gr.Button("分析文件")
     process_message = gr.Markdown()
@@ -176,12 +185,15 @@ with gr.Blocks() as demo:
         chat_hitsory = gr.Textbox(label="历史对话", lines=10)
         source_documents = gr.Textbox(label="来源信息", lines=10)
 
-    btn_clear = gr.Button("清除所有")
+    btn_clear = gr.Button("清除对话记录")
+
+    btn_delete_user = gr.Button("删除用户")
 
     # btn_process.click(fn=save_file_and_load_db, inputs = [pdf_upload], outputs = [output_question, output_answer])
-    btn_process.click(fn=process_file, inputs = [pdf_upload], outputs = [process_message])
+    btn_process.click(fn=process_file, inputs = [pdf_upload, userid], outputs = [process_message])
     btn_ask.click(fn=get_answer, inputs = [current_question], outputs = [current_answer, chat_hitsory, source_documents, generated_question])
     btn_clear.click(fn=clear_all_files_only, outputs = [pdf_upload, chat_hitsory, source_documents])
+    btn_delete_user.click(fn=delete_user, inputs = [userid], outputs = [pdf_upload, chat_hitsory, source_documents, generated_question])
 
 gr.close_all()
 demo.launch(share=False, server_port=7878, allowed_paths=["D:\MyDocuments\03-PythonProjects\ChatGPT_Projects\chatpdf-demo\doc"])
