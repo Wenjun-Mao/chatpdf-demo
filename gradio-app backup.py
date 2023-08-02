@@ -89,57 +89,31 @@ qa = None
 process_status = False
 
 def save_file(file):
-    if not os.path.exists("doc"):
-        os.makedirs("doc")
-
-    base_file_name = os.path.basename(file.name)
-    saved_file_path = os.path.join("doc", base_file_name)
+    saved_file_path = "temp.pdf"
     shutil.move(file.name, saved_file_path)
-    
     return saved_file_path
 
-def save_file_and_load_db(files):
+def save_file_and_load_db(file):
     global qa
-    file_paths = []
-    for file in files:
-        file_path = save_file(file)
-        file_paths.append(file_path)
-    # qa = load_db(file_path)
-    qa = 1
+    file_path = save_file(file)
+    qa = load_db(file_path)
     return qa
 
-
-def clear_all_files_only():
+def clear_all():
     global qa
     global process_status
     qa = None
     process_status = False
-    if os.path.exists('doc'):
-        for filename in os.listdir('doc'):
-            file_path = os.path.join('doc', filename)
-            if os.path.isfile(file_path) or os.path.islink(file_path):
-                os.unlink(file_path)
-            elif os.path.isdir(file_path):
-                shutil.rmtree(file_path)
+    if os.path.exists('temp.pdf'):
+        os.remove('temp.pdf')
     return None, None, None
 
-
-def clear_all_files_and_folder():
-    global qa
-    global process_status
-    qa = None
-    process_status = False
-    if os.path.exists('doc'):
-        shutil.rmtree('doc')
-    return None, None, None
-
-
-def process_file(files):
+def process_file(file):
     global process_status
     global qa
-    if files is not None:
+    if file is not None:
         try:
-            qa = save_file_and_load_db(files)
+            qa = save_file_and_load_db(file)
         except:
             return "Error processing file."
         process_status = True
@@ -181,7 +155,7 @@ with gr.Blocks() as demo:
     # btn_process.click(fn=save_file_and_load_db, inputs = [pdf_upload], outputs = [output_question, output_answer])
     btn_process.click(fn=process_file, inputs = [pdf_upload], outputs = [process_message])
     btn_ask.click(fn=get_answer, inputs = [current_question], outputs = [current_answer, chat_hitsory, source_documents, generated_question])
-    btn_clear.click(fn=clear_all_files_only, outputs = [pdf_upload, chat_hitsory, source_documents])
+    btn_clear.click(fn=clear_all, outputs = [pdf_upload, chat_hitsory, source_documents])
 
 gr.close_all()
-demo.launch(share=False, server_port=7878, allowed_paths=["D:\MyDocuments\03-PythonProjects\ChatGPT_Projects\chatpdf-demo\doc"])
+demo.launch(share=False, server_port=7878)
