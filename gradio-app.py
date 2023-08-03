@@ -1,4 +1,17 @@
+import requests
+
+# This is a hack to prevent Gradio from phoning home when it gets imported
+def my_get(url, **kwargs):
+    logging.info('Gradio HTTP request redirected to localhost :)')
+    kwargs.setdefault('allow_redirects', True)
+    return requests.api.request('get', 'http://127.0.0.1/', **kwargs)
+
+original_get = requests.get
+requests.get = my_get
 import gradio as gr
+requests.get = original_get
+
+
 import os
 import shutil
 import glob
@@ -10,135 +23,57 @@ from util import (
     prettify_chat_history,
     delete_user,
     clear_all_files_only,
+    create_user_vectordb_with_initial_files,
+    load_user_db,
+    load_and_add_new_files_to_user_db,
+    create_qa_chain,
 )
 
+
+import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 qa = None
 process_status = False
 USERID = ""
 
-# ---------- langchain Start----------
-from langchain.vectorstores import Chroma
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.document_loaders import PDFPlumberLoader
-from langchain.embeddings.openai import OpenAIEmbeddings
-from langchain.memory import ConversationBufferMemory
-from langchain.chains import ConversationalRetrievalChain
-from langchain.chat_models import ChatOpenAI
-
-embedding = OpenAIEmbeddings()
-
-def load_pdf(file_list):
-    loders = [PDFPlumberLoader(file) for file in file_list]
-    docs = []
-    for loader in loders:
-        docs.extend(loader.load())
-    return docs
-
-
-def split_docs(docs, chinese=True):
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
-    if chinese:
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=70)
-    splits = text_splitter.split_documents(docs)
-    return splits
-
-
-def create_vectordb(splits, persist_directory):
-    vectordb = Chroma.from_documents(
-    documents=splits,
-    embedding=embedding,
-    persist_directory=persist_directory
-)
-    vectordb.persist()
-    return vectordb
-
-
-def create_user_vectordb_with_initial_files(file_list, userid):
-    persist_directory = f'user_files/{userid}/chroma/'
-    if not os.path.exists(persist_directory):
-        os.makedirs(persist_directory)
-    docs = load_pdf(file_list)
-    splits = split_docs(docs)
-    vectordb = create_vectordb(splits, persist_directory)
-    message = f"Created user vectordb with {len(file_list)} files. User ID: {userid}"
-    return message, vectordb
-
-
-def load_user_db(userid):
-    persist_directory = f'user_files/{userid}/chroma/'
-    vectordb = Chroma(
-        persist_directory=persist_directory,
-        embedding_function=embedding
-    )
-    return vectordb
-
-
-def load_and_add_new_files_to_user_db(file_list, userid):
-    persist_directory = f'user_files/{userid}/chroma/'
-    docs = load_pdf(file_list)
-    splits = split_docs(docs)
-    vectordb = load_user_db(persist_directory)
-    _ = vectordb.add_documents(splits)
-    return vectordb
-
-
-def create_qa_chain(vectordb, llm_name="gpt-3.5-turbo-0613", chain_type='stuff', k=4, mmr=True):
-    memory = ConversationBufferMemory(
-        memory_key="chat_history",
-        input_key='question',
-        output_key='answer',
-        return_messages=True
-    )
-    retriever=vectordb.as_retriever(search_type="similarity", search_kwargs={"k": k})
-    if mmr:
-        retriever=vectordb.as_retriever(search_type="mmr", search_kwargs={"k": k})
-
-    qa_chain = ConversationalRetrievalChain.from_llm(
-        llm=ChatOpenAI(model_name=llm_name, temperature=0),
-        chain_type=chain_type,
-        retriever=retriever,
-        return_source_documents=True,
-        return_generated_question=True,
-        verbose=True,
-        memory=memory,
-    )
-    return qa_chain
-
-
-# ---------- langchain End----------
 
 def get_user_existing_files_list(userid):
+    logger.info(f"Checking if user {userid} exists...")
+
+    existing_files_basename = []
+
     # Check if user exists
     if os.path.exists(f"user_files/{userid}"):
-        # If user exists, read existing file names
         try:
+            # If user exists, read existing file names
             with open(f"user_files/{userid}/file_list.txt", 'r', encoding='utf-8') as f:
-                existing_files = f.read().splitlines()
+                existing_files_basename = f.read().splitlines()
         except FileNotFoundError:
+            logger.info(f"FileNotFoundError User {userid} file_list does not exist.")
             # Check if there are files in the "docs" folder
             docs_dir = f"user_files/{userid}/docs"
             if os.path.exists(docs_dir) and glob.glob(docs_dir + '/*.pdf'):
-                print("User list corrupted, reloading existing files...")
-                existing_files = os.listdir(docs_dir)
+                logger.info("User list corrupted, reloading existing files...")
+                existing_files_basename = os.listdir(docs_dir)
+                logger.info(existing_files_basename)
                 
                 # Delete existing db
                 if os.path.exists(f'user_files/{userid}/chroma/'):
                     shutil.rmtree(f'user_files/{userid}/chroma/')
-                _ = create_user_vectordb_with_initial_files(existing_files, userid)
+                existing_files_fullpath = [os.path.join(docs_dir, f) for f in existing_files_basename]
+                _ = create_user_vectordb_with_initial_files(existing_files_fullpath, userid)
 
                 # Create file list
                 with open(f"user_files/{userid}/file_list.txt", 'w', encoding='utf-8') as f:
-                    f.write('\n'.join(existing_files))
-            else:
-                existing_files = []
-    else:
-        existing_files = []
-
-    return existing_files
+                    f.write('\n'.join(existing_files_basename))
+    logger.info(f"Existing files: {existing_files_basename}")
+    return existing_files_basename
 
 
-def save_file(file: IO, userid: str, existing_files: list[str]) -> tuple[str, str]:
+
+def save_file(file: IO, userid: str, existing_files_basename: list[str]) -> tuple[str, str]:
     # if file already exists
     # return (None, "file already exists")
     # if file does not exist
@@ -150,14 +85,14 @@ def save_file(file: IO, userid: str, existing_files: list[str]) -> tuple[str, st
     base_file_name = os.path.basename(file.name)
 
     # Check if file already exists in the list
-    if base_file_name in existing_files:
+    if base_file_name in existing_files_basename:
         return None, f"File '{base_file_name}' already exists."
 
     # Save new file
-    saved_file_path = os.path.join(f"user_files/{userid}/docs", base_file_name)
-    shutil.move(file.name, saved_file_path)
+    saved_file_fullpath = os.path.join(f"user_files/{userid}/docs", base_file_name)
+    shutil.move(file.name, saved_file_fullpath)
 
-    return saved_file_path, None
+    return saved_file_fullpath, None
 
 
 def save_files(files, userid):
@@ -165,22 +100,22 @@ def save_files(files, userid):
     # Get only new added file paths
     # Write to user_files/userid/file_list.txt
     # Return list of only new added file paths
-    added_file_paths = []
+    added_files_fullpaths = []
     already_exist_messages = []
-    existing_files = get_user_existing_files_list(userid)
+    existing_files_basename = get_user_existing_files_list(userid)
 
     for file in files:
-        file_path, message = save_file(file, userid, existing_files)
-        if file_path:
-            added_file_paths.append(file_path)
+        saved_file_fullpath, message = save_file(file, userid, existing_files_basename)
+        if saved_file_fullpath:
+            added_files_fullpaths.append(saved_file_fullpath)
         if message:
             already_exist_messages.append(message)
 
     # Update file list
     with open(f"user_files/{userid}/file_list.txt", 'w', encoding='utf-8') as f:
-        f.write('\n'.join([os.path.basename(fp) for fp in added_file_paths + existing_files]))
+        f.write('\n'.join([os.path.basename(fp) for fp in added_files_fullpaths + existing_files_basename]))
 
-    return added_file_paths, already_exist_messages
+    return added_files_fullpaths, already_exist_messages
 
 
 def process_file_and_load_user_profile(files, userid):
@@ -198,10 +133,18 @@ def process_file_and_load_user_profile(files, userid):
         existing_user = os.path.exists(f"user_files/{userid}")
         if existing_user:
             if files is not None:
-                added_file_paths, _ = save_files(files, userid)
-                vectordb = load_and_add_new_files_to_user_db(added_file_paths, userid)
+                logger.info(f'Existing user, file not None')
+                added_file_fullpaths, _ = save_files(files, userid)
+                logger.info(f"Added files: {added_file_fullpaths}")
+                logger.info(f'Current working directory: {os.getcwd()}')
+                if added_file_fullpaths==[]:
+                    vectordb = load_user_db(userid)
+                else:
+                    vectordb = load_and_add_new_files_to_user_db(added_file_fullpaths, userid)
             else: # no new files
+                logger.info(f'Existing user, file None')
                 vectordb = load_user_db(userid)
+            logger.info(f"Crate qa chain with vectordb")
             qa = create_qa_chain(vectordb)
             process_status = True
             process_message = "文件已分析完毕 Files have been processed."
@@ -209,8 +152,8 @@ def process_file_and_load_user_profile(files, userid):
         else: # new user
             if files is not None:
                 # save files and create user db
-                added_file_paths, _ = save_files(files, userid)
-                process_message, vectordb = create_user_vectordb_with_initial_files(added_file_paths, userid)
+                added_file_fullpaths, _ = save_files(files, userid)
+                process_message, vectordb = create_user_vectordb_with_initial_files(added_file_fullpaths, userid)
                 qa = create_qa_chain(vectordb)
                 process_status = True
             else:
@@ -264,4 +207,4 @@ with gr.Blocks() as demo:
     btn_delete_user.click(fn=delete_user, inputs = [userid], outputs = [pdf_upload, chat_hitsory, source_documents, generated_question])
 
 gr.close_all()
-demo.launch(share=False, server_port=7878, allowed_paths=["D:\MyDocuments\03-PythonProjects\ChatGPT_Projects\chatpdf-demo\doc"])
+demo.launch(share=False, server_port=7878)
