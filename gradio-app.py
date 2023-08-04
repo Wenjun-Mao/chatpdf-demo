@@ -40,7 +40,6 @@ logger = logging.getLogger(__name__)
 
 qa = None
 process_status = False
-USERID = ""
 
 
 def get_user_existing_files_list(userid):
@@ -139,9 +138,6 @@ def save_files(files, userid):
 def process_file_and_load_user_profile(files, userid):
     global process_status
     global qa
-    global USERID
-
-    USERID = userid
 
     if userid == "":
         process_message = "请先输入用户ID -- Please enter a user ID first"
@@ -188,8 +184,6 @@ def process_file_and_load_user_profile(files, userid):
 def get_answer(question, userid):
     global qa
     global process_status
-    global USERID
-    USERID = userid
 
     if process_status:
         result = qa({"question": question})
