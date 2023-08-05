@@ -193,11 +193,11 @@ class AIAssistant:
 
 class GradioApp:
     def __init__(self):
-        self.demo = gr.Blocks()
+        self.ui = gr.Blocks()
         self.ai_assistant = None
 
     def launch(self):
-        with self.demo:
+        with self.ui:
             gr.Markdown("# AI 论文小助手")
             userid = gr.Textbox(label="用户ID")
             pdf_upload = gr.Files(label="上传PDF文件")
@@ -252,7 +252,7 @@ class GradioApp:
             )
 
         gr.close_all()
-        self.demo.launch(share=False, server_port=7878)
+        self.ui.launch(share=False, server_port=7878)
 
     def process_file_and_load_user_profile(self, files, userid):
         self.ai_assistant = AIAssistant(userid)
