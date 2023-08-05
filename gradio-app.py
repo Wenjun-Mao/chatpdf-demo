@@ -3,6 +3,7 @@
 import os
 import shutil
 import glob
+import pypdf
 
 from typing import IO
 
@@ -254,7 +255,24 @@ class GradioApp:
         gr.close_all()
         self.ui.launch(share=False, server_port=7878)
 
+
+    def verify_pdf_files(self, files):
+        invalid_files = []
+        for file in files:
+            try:
+                pypdf.PdfReader(file.name)
+            except pypdf.errors.PdfReadError:
+                invalid_files.append(os.path.basename(file.name))
+        if invalid_files:
+            return f"The following PDF files could not be properly loaded: \n\n{', '.join(invalid_files)}"
+        else:
+            return None
+
     def process_file_and_load_user_profile(self, files, userid):
+        if files is not None:
+            invalid_files_message = self.verify_pdf_files(files)
+            if invalid_files_message:
+                return invalid_files_message
         self.ai_assistant = AIAssistant(userid)
         process_message = self.ai_assistant.process_file_and_load_user_profile(files)
         return process_message
